@@ -698,6 +698,148 @@ Some relevant sections from cppreference.com:
 Although related, the use of `std::initializer_list` remains forbidden, as
 part of the avoidance of the C++ Standard Library in HotSpot code.
 
+### Local Function Objects
+
+Single-use function objects can be defined locally within a function.  This
+is an alternative to having a function or function object class defined at
+class or namespace scope.  Instead, a function class definition is placed
+directly at the point of use.
+
+This usage was somewhat limited by C++03, which does not permit such a class
+to be used as a template parameter.  That restriction was removed by C++11
+([n2657]). Use of this feature is permitted.
+
+Many HotSpot protocols involve "function-like" objects that involve some
+named member function rather than a call operator.  For example, a function
+that performs some action on all threads might be written as
+
+```
+void do_something() {
+  struct DoSomething : public ThreadClosure {
+    virtual void do_thread(Thread* t) {
+      ... do something with t ...
+    }
+  } closure;
+  Threads::threads_do(&closure);
+}
+```
+
+HotSpot code has historically usually placed the DoSomething class at
+namespace (or sometimes class) scope.  This separates the function's code
+from its use, often to the detriment of readability.  It requires giving the
+class a globally unique name (if at namespace scope).  It also loses the
+information that the class is intended for use in exactly one place, and
+does not have any subclasses.  (However, the latter can now be indicated by
+declaring it `final`.)  Often, for simplicity, a local class will skip
+things like access control and accessor functions, giving the enclosing
+function direct access to the implementation and eliminating some
+boilerplate that might be provided if the class is in some outer (more
+accessible) scope.  On the other hand, if there is a lot of surrounding code
+in the function body or the local class is of significant size, defining it
+locally can increase clutter and reduce readability.
+
+C++11 added _lambda expressions_ as a new way to write a function object.
+Simple lambda expressions can be significantly more concise than a function
+object, eliminating a lot of boiler-plate.  On the other hand, a complex
+lambda expression may not provide much, if any, readability benefit compared
+to an ordinary function object.  Also, while a lambda can encapsulate a call
+to a "function-like" object, it cannot be used in place of such.
+
+A common use for local functions is as one-use [RAII] objects.  The amount
+of boilerplate for a function object class (local or not) makes such usage
+somewhat clumsy and verbose.  But with the help of a small amount of
+supporting utility code, lambdas work particularly well for this use case.
+
+Another use for local functions is partial application.  Again here, lambdas
+are typically much simpler and less verbose than function object classes.
+
+Because of these benefits, lambda expressions are permitted in HotSpot code,
+with some restrictions and usage guidance.
+
+* Lambda expressions should only be used as a downward value.  In
+particular, a lambda should not be returned from a function or stored in
+global or thread-local variables, whether directly or as the value of a
+member of some other object.  Lambda capture is syntactically subtle (by
+design), and propagating a lambda in such ways can easily pass captured
+values to places where they are no longer valid.  In particular, members of
+the enclosing `this` are captured by reference because `this` is captured by
+reference, even when the default capture is by-value.  For such use-cases a
+function object class should be used to make the desired value capturing
+explicit.
+
+* Lambda expressions should be relatively simple.  Complex capture lists,
+complex non-deduced return types, and large, complex bodies should be
+avoided.  A function object class (whether local or not) may be preferable
+in such cases.
+
+* Return type deduction is permitted, and indeed encouraged. 
+
+* Implicit capture lists are permitted.  These combine well with simple
+bodies to make the code small and obvious.  These combine poorly with large
+bodies, where it can be hard to spot what is being captured and verify the
+kind of capture is correct.
+
+* Capture initializers (a C++14 feature - [N3649]) are not permitted.
+Capture initializers inherently increase the complexity of the capture list,
+and provide little benefit over an additional in-scope local variable.
+
+* An empty parameter list may be elided.
+
+* Generic lambdas are permitted.
+
+C++11 also added _bind expressions_ as a way to write a function object for
+partial application, using `std::bind` and related facilities from the
+Standard Library.  `std::bind` generalizes and replaces some of the binders
+from C++03.  Bind expressions are not permitted in HotSpot code.  They don't
+provide enough benefit over lambdas or local function classes in the cases
+where bind expressions are applicable to warrant the introduction of yet
+another mechanism in this space into HotSpot code.
+
+References:
+
+* Local and unnamed types as template parameters ([n2657])
+* New wording for C++0x lambdas ([n2927])
+* Generalized lambda capture (init-capture) ([N3648])
+* Generic (polymorphic) lambda expressions ([N3649])
+
+[n2657]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2008/n2657.htm 
+[n2927]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2009/n2927.pdf
+[N3648]: https://isocpp.org/files/papers/N3648.html
+[N3649]: https://isocpp.org/files/papers/N3649.html
+
+References from C++17
+
+* Wording for constexpr lambda ([p0170r1])
+* Lambda capture of *this by Value ([p0018r3])
+
+[p0170r1]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0170r1.pdf
+[p0018r3]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0018r3.html
+
+References from C++20
+
+* Allow lambda capture [=, this] ([p0409r2])
+* Familiar template syntax for generic lambdas ([p0428r2])
+* Simplifying implicit lambda capture ([p0588r1])
+* Default constructible and assignable stateless lambdas ([p0624r2])
+* Lambdas in unevaluated contexts ([p0315r4])
+* Allow pack expansion in lambda init-capture ([p0780r2]) ([p2095r0])
+* Deprecate implicit capture of this via [=] ([p0806r2])
+
+[p0409r2]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0409r2.html
+[p0428r2]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0428r2.pdf
+[p0588r1]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0588r1.html
+[p0624r2]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0624r2.pdf
+[p0315r4]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0315r4.pdf
+[p0780r2]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p0780r2.html
+[p2095r0]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/p2095r0.html
+[p0806r2]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p0806r2.html
+
+References from C++23
+
+* Make () more optional for lambdas  ([p1102r2])
+
+[p1102r2]: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/p1102r2.html
+
 ### Additional Permitted Features
 
 * `constexpr`
@@ -751,9 +893,6 @@ part of the avoidance of the C++ Standard Library in HotSpot code.
 ([n2928](http://www.open-std.org/JTC1/SC22/WG21/docs/papers/2009/n2928.htm)),
 ([n3206](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2010/n3206.htm)),
 ([n3272](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3272.htm))
-
-* Local and unnamed types as template parameters
-([n2657](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2008/n2657.htm))
 
 * Range-based `for` loops
 ([n2930](http://www.open-std.org/JTC1/SC22/WG21/docs/papers/2009/n2930.html))
@@ -831,9 +970,6 @@ features that have not yet been discussed.
 ([n2761](http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2008/n2761.pdf))
 
 * Rvalue references and move semantics
-
-* Lambdas
-
 
 [ADL]: https://en.cppreference.com/w/cpp/language/adl 
   "Argument Dependent Lookup"
