@@ -63,6 +63,7 @@
 #include "utilities/classpathStream.hpp"
 #include "utilities/defaultStream.hpp"
 #include "utilities/ostream.hpp"
+#include "utilities/scopeGuard.hpp"
 #if INCLUDE_G1GC
 #include "gc/g1/g1CollectedHeap.hpp"
 #include "gc/g1/heapRegion.hpp"
@@ -1916,14 +1917,7 @@ void FileMapInfo::map_heap_regions() {
 bool FileMapInfo::map_heap_data(MemRegion **heap_mem, int first,
                                 int max, int* num, bool is_open_archive) {
   MemRegion* regions = MemRegion::create_array(max, mtInternal);
-
-  struct Cleanup {
-    MemRegion* _regions;
-    uint _length;
-    bool _aborted;
-    Cleanup(MemRegion* regions, uint length) : _regions(regions), _length(length), _aborted(true) { }
-    ~Cleanup() { if (_aborted) { MemRegion::destroy_array(_regions, _length); } }
-  } cleanup(regions, max);
+  auto cleanup = make_guard([=] { MemRegion::destroy_array(regions, max); });
 
   FileMapRegion* si;
   int region_num = 0;
@@ -1984,7 +1978,7 @@ bool FileMapInfo::map_heap_data(MemRegion **heap_mem, int first,
     }
   }
 
-  cleanup._aborted = false;
+  cleanup.release();    // Disable cleanup of regions before returning it.
   // the shared heap data is mapped successfully
   *heap_mem = regions;
   *num = region_num;

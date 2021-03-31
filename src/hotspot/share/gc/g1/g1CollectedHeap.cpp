@@ -110,6 +110,7 @@
 #include "utilities/autoRestore.hpp"
 #include "utilities/bitMap.inline.hpp"
 #include "utilities/globalDefinitions.hpp"
+#include "utilities/scopeGuard.hpp"
 #include "utilities/stack.inline.hpp"
 
 size_t G1CollectedHeap::_humongous_object_threshold_in_words = 0;
@@ -4151,17 +4152,6 @@ class G1FreeCollectionSetTask : public AbstractGangTask {
       }
     };
 
-    // Helper to do timing for region work.
-    class TimerForRegion {
-      Tickspan& _time;
-      Ticks     _start_time;
-    public:
-      TimerForRegion(Tickspan& time) : _time(time), _start_time(Ticks::now()) { }
-      ~TimerForRegion() {
-        _time += Ticks::now() - _start_time;
-      }
-    };
-
     // FreeCSetClosure members
     G1CollectedHeap* _g1h;
     const size_t*    _surviving_young_words;
@@ -4221,7 +4211,9 @@ class G1FreeCollectionSetTask : public AbstractGangTask {
     virtual bool do_heap_region(HeapRegion* r) {
       assert(r->in_collection_set(), "Invariant: %u missing from CSet", r->hrm_index());
       JFREventForRegion event(r, _worker_id);
-      TimerForRegion timer(timer_for_region(r));
+      // Record time to process the region.
+      Ticks start_time = Ticks::now();
+      auto g = make_guard([=] { timer_for_region(r) += Ticks::now() - start_time; });
 
       _g1h->clear_region_attr(r);
       stats()->account_rs_length(r);
