@@ -706,7 +706,7 @@ void CompilerOracle::parse_from_line(char* line) {
   if (line[0] == '#')  return;
 
   char* original_line = os::strdup(line, mtInternal);
-  auto g = make_guard([=] { os::free(original_line); });
+  auto g = make_guard([&] { os::free(original_line); });
 
   int bytes_read;
   char error_buf[1024] = {0};

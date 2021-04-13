@@ -756,36 +756,142 @@ are typically much simpler and less verbose than function object classes.
 Because of these benefits, lambda expressions are permitted in HotSpot code,
 with some restrictions and usage guidance.
 
-* Lambda expressions should only be used as a downward value.  In
-particular, a lambda should not be returned from a function or stored in
-global or thread-local variables, whether directly or as the value of a
-member of some other object.  Lambda capture is syntactically subtle (by
-design), and propagating a lambda in such ways can easily pass captured
-values to places where they are no longer valid.  In particular, members of
-the enclosing `this` are captured by reference because `this` is captured by
-reference, even when the default capture is by-value.  For such use-cases a
-function object class should be used to make the desired value capturing
-explicit.
+* Lambda expressions must only be used as a downward value.
+* The capture list of a lambda expression should be `[&]`.
+* Return type deduction is permitted, and indeed encouraged.
+* An empty parameter list may be elided.
+* A lambda expression must not be `mutable`.
+* Generic lambdas are permitted.
+* Lambda expressions should be relatively simple.
+* Anonymous lambda expressions should not overly clutter the enclosing expression.
+* Don't directly invoke an anonymous lambda expression.
 
-* Lambda expressions should be relatively simple.  Complex capture lists,
-complex non-deduced return types, and large, complex bodies should be
-avoided.  A function object class (whether local or not) may be preferable
-in such cases.
+Lambda expressions should only be passed downward.  In particular, a lambda
+should not be returned from a function or stored in a global variable,
+whether directly or as the value of a member of some other object.  Lambda
+capture is syntactically subtle (by design), and propagating a lambda in
+such ways can easily pass references captured values to places where they
+are no longer valid.  In particular, members of the enclosing `this` object
+are effectively captured by reference, even if the default capture is
+by-value.  For such uses-cases a function object class should be used to
+make the desired value capturing and propagation explicit.
 
-* Return type deduction is permitted, and indeed encouraged. 
+Limiting the capture list to `[&]` (implicitly capture by reference) is a
+simplifying restriction that still provides good support for HotSpot usage,
+while reducing the cases a reader must recognize and understand.
 
-* Implicit capture lists are permitted.  These combine well with simple
-bodies to make the code small and obvious.  These combine poorly with large
-bodies, where it can be hard to spot what is being captured and verify the
-kind of capture is correct.
+* Many common lambda uses require reference capture.  Not permitting it
+would substantially reduce the utility of lambdas.
+
+* Implicit reference capture makes variable references in the lambda body
+have the same meaning they would have in the enclosing code.  There isn't a
+semantic barrier across which the meaning of a variable changes.
+
+* Explicit reference capture introduces significant clutter without any
+significant balancing gain, especially when lambda expressions are
+relatively small and simple, as they should be in HotSpot code.
+
+* On the other hand, by-value capture has little value in HotSpot code.  The
+primary use-case for by-value capture is lifetime management when the lambda
+is used in a non-downward context, but that's not permitted in HotSpot
+code. Another is to make a lambda-local copy for mutation, which requires
+making the lambda `mutable`; see below.  A third reason to use by-value
+capture is as an optimization, avoiding any overhead for reference capture
+of cheap to copy values.  But the compiler can often eliminate any such
+overhead. On the other hand, implicit by-value capture introduces hidden and
+potentially unexpected and expensive copies. So for HotSpot it's better to
+entirely avoid by-value capture.
+
+* Non-capturing lambdas (with an empty capture list - `[]`) have limited
+utility.  There are cases where no captures are required (pure functions,
+for example), but if the function is small and simple then that's obvious
+anyway.  On the other hand, always using `[&]` to start a lambda gives a
+consistent marker to look for.
 
 * Capture initializers (a C++14 feature - [N3649]) are not permitted.
 Capture initializers inherently increase the complexity of the capture list,
 and provide little benefit over an additional in-scope local variable.
 
-* An empty parameter list may be elided.
+The use of `mutable` lambda expressions is forbidden because there don't
+seem to be many, if any, good use-cases for them in HotSpot.  A lambda
+expression needs to be mutable in order to modify a by-value captured value.
+But with only downward lambdas, such usage seems likely to be rare and
+complicated.  It is better to use a function object class in any such cases
+that arise, rather than requiring all HotSpot developers to understand this
+relatively obscure feature.
 
-* Generic lambdas are permitted.
+While it is possible to directly invoke an anonymous lambda expression, that
+feature should not be used, as such a form can be confusing to readers.
+Instead, name the lambda and call it by name.
+
+Lambda expressions, and particularly anonymous lambda expressions, should be
+simple and compact.  One-liners are good.  Anonymous lambdas should not have
+more than a couple lines of body code.  A lambda should not clutter the
+enclosing function and make it long and complex; do continue to break up
+large functions up via the use of separate helper functions.
+
+An anonymous lambda expression should either be a one-liner in a one-line
+expression, or isolated in its own set of lines.  Don't place part of a
+lambda expression on the same line as other arguments to a function.  The
+body of a multi-line lamba should be indented from the start of the capture
+list, as if that were the start of an ordinary function definition.
+
+Some examples:
+
+1. `foo([&] { ++counter; });`
+2. `foo(x, [&] { ++counter; });`
+3. `foo([&] { if (predicate) ++counter; });`
+4. `foo([&] { auto tmp = process(x); tmp.f(); return tmp.g(); })`
+5. Separate one-line lambda from other arguments:
+```
+foo(c.begin(), c.end(),
+    [&] (const X& x) { do_something(x); return x.value(); });
+```
+6. Indentation for multi-line lambda:
+```
+c.do_entries([&] (const X& x) {
+               do_something(x, a);
+               do_something1(x, b);
+               do_something2(x, c);
+             });
+```
+7. Separate multi-line lambda from other arguments:
+```
+foo(c.begin(), c.end(),
+    [&] (const X& x) {
+      do_something(x, a);
+      do_something1(x, b);
+      do_something2(x, c);
+    });
+```
+
+Item 4, and especially items 6 and 7, are pushing the simplicity limits for
+anonymous lambdas.  Item 6 might be better written as
+
+```
+auto do_entry = [&] (const X& x) {
+                  do_something(x, a);
+                  do_something1(x, b);
+                  do_something2(x, c);
+                };
+c.do_entries(do_entry);
+```
+
+or perhaps even better, by using a helper function:
+
+```
+void do_entry_helper(const X& x, int a, int b, int c) {
+  do_something(x, a);
+  do_something1(x, b);
+  do_something2(x, c);
+}
+...  
+c.do_entries([&] (const X& x) { do_entry_helper(x, a, b, c); });
+```
+
+There may be occasions where some of these rules and restrictions need to be
+violated for good reason, particularly for capture lists.  As usual, any
+such variations must be well commented.
 
 C++11 also added _bind expressions_ as a way to write a function object for
 partial application, using `std::bind` and related facilities from the

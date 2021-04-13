@@ -4213,7 +4213,7 @@ class G1FreeCollectionSetTask : public AbstractGangTask {
       JFREventForRegion event(r, _worker_id);
       // Record time to process the region.
       Ticks start_time = Ticks::now();
-      auto g = make_guard([=] { timer_for_region(r) += Ticks::now() - start_time; });
+      auto g = make_guard([&] { timer_for_region(r) += Ticks::now() - start_time; });
 
       _g1h->clear_region_attr(r);
       stats()->account_rs_length(r);
